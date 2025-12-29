@@ -1,0 +1,103 @@
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+import ollama
+
+# 1. PAGE SETUP
+st.set_page_config(page_title="AI Data Analyst", layout="wide")
+st.title("🤖 My Local AI Data Analyst (Llama 3.2)")
+
+# 2. FILE UPLOADER
+uploaded_file = st.file_uploader("Upload your data (CSV or Excel files)", type=["csv", "xlsx"])
+
+if uploaded_file is not None:
+    # Load the data depending on file type
+    if uploaded_file.name.lower().endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
+
+    # Show the data to the user
+    st.write("### 📋 Data Preview")
+    st.dataframe(df.head(5))
+
+    # 3. CHAT INTERFACE
+    st.write("---")
+    user_query = st.text_input(
+        "💬 Ask a question about your data:",
+        placeholder="e.g., 'Show me a bar chart of Product vs TotalPrice'",
+    )
+
+    if user_query:
+        # Get column names to help the AI understand the file
+        columns = ", ".join(df.columns.tolist())
+
+        # Instruction for Llama
+        prompt = f"""
+        You are a Python Data Analyst.
+        Dataset Columns: {columns}
+        Task: Write ONLY the Python code to answer: "{user_query}"
+        
+        CRITICAL RULES:
+        - DO NOT write ANY import statements. 'df', 'st', 'plt', and 'pd' are already available.
+        - Use ONLY matplotlib (plt) for charts. DO NOT use plotly, seaborn, or any other library.
+        - NEVER use 'if df["column"]' directly. 
+        - If filtering, use: df[df["column"] == "value"]
+        - If checking if a column exists, use: if "column" in df.columns
+        - Do NOT say "Here is the code" or "Sure thing".
+        - Do NOT use ```python blocks. Start immediately with the code.
+        - Use 'st.pyplot(plt.gcf())' to show the chart.
+        
+        For bar charts, use matplotlib like this:
+        plt.figure(figsize=(10, 6))
+        plt.bar(x_data, y_data)
+        plt.xlabel('X Label')
+        plt.ylabel('Y Label')
+        plt.title('Chart Title')
+        st.pyplot(plt.gcf())
+        plt.clf()
+        
+        - Use 'st.write()' for text output.
+        - Do NOT use ```python backticks or any markdown formatting.
+        - Output ONLY raw Python code, nothing else.
+        """
+
+        clean_code = ""
+        generated_code = ""
+        with st.spinner("Analyzing..."):
+            try:
+                # 4. TALK TO OLLAMA
+                response = ollama.generate(model='llama3.2:latest', prompt=prompt)
+                raw_response = response['response'].strip()
+
+                # --- THE CLEANER ---
+                # If Llama still adds words, we find the first lines of actual code
+                lines = raw_response.split("\n")
+                clean_lines = []
+                for line in lines:
+                    # Skip lines that look like talking
+                    if "Here is" in line or "Sure" in line or "```" in line:
+                        continue
+                    clean_lines.append(line)
+
+                clean_code = "\n".join(clean_lines)
+
+                # Remove any import statements (AI sometimes ignores instructions)
+                lines = clean_code.split("\n")
+                clean_lines = [
+                    line
+                    for line in lines
+                    if not line.strip().startswith("import ")
+                    and not line.strip().startswith("from ")
+                ]
+                clean_code = "\n".join(clean_lines).strip()
+
+                # --- THE EXECUTION ---
+                # We hide the code and only show the RESULT (the chart / output)
+                # st.code(clean_code)  # Uncomment if you WANT to see the code
+                local_env = {"df": df, "st": st, "plt": plt, "pd": pd}
+                exec(clean_code, {}, local_env)
+
+            except Exception as e:
+                st.error("The AI's code had an error. Here is what it tried to do:")
+                st.code(clean_code or raw_response)
